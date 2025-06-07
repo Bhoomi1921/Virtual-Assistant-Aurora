@@ -2,10 +2,24 @@ import pyttsx3
 import speech_recognition as sr 
 from datetime import datetime
 import webbrowser
-import Music
+import requests
+import json
+import base64
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Initialize APIs
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
+SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
+SPOTIFY_REDIRECT_URI = os.getenv('SPOTIFY_REDIRECT_URI', 'http://example.com/callback')
 
 # Initialize the text-to-speech engine
 engine = pyttsx3.init()
+
 def speak(text):
     engine.say(text)
     engine.runAndWait()
@@ -14,6 +28,7 @@ def listen():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         print("Listening...")
+        recognizer.adjust_for_ambient_noise(source)
         audio = recognizer.listen(source)
         try:
             command = recognizer.recognize_google(audio)
@@ -24,6 +39,66 @@ def listen():
         except sr.RequestError:
             speak("Sorry, there's a problem with the speech recognition service.")
             return None
+
+def get_spotify_token():
+    """Get access token from Spotify API"""
+    auth_string = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+    auth_bytes = auth_string.encode("utf-8")
+    auth_base64 = str(base64.b64encode(auth_bytes), "utf-8")
+    
+    url = "https://accounts.spotify.com/api/token"
+    headers = {
+        "Authorization": f"Basic {auth_base64}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {"grant_type": "client_credentials"}
+    
+    response = requests.post(url, headers=headers, data=data)
+    json_result = json.loads(response.content)
+    return json_result["access_token"]
+
+def search_spotify(query, search_type="track"):
+    """Search for items on Spotify"""
+    token = get_spotify_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://api.spotify.com/v1/search?q={query}&type={search_type}&limit=1"
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    return None
+
+def play_on_spotify(song_name):
+    """Play a song on Spotify (requires Spotify app to be open)"""
+    result = search_spotify(song_name)
+    if result and 'tracks' in result and 'items' in result['tracks']:
+        if len(result['tracks']['items']) > 0:
+            track_uri = result['tracks']['items'][0]['uri']
+            webbrowser.open(track_uri)
+            return True
+    return False
+
+def ask_openai(prompt):
+    """Get response from OpenAI's API"""
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
+    
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers,
+        json=data
+    )
+    
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    return None
 
 def handle_command(command):
     if 'time' in command:
@@ -41,42 +116,49 @@ def handle_command(command):
             speak(f"The result of {expression} is {result}")
         except Exception as e:
             speak(f"Sorry, I couldn't calculate that. Error: {e}")
-    elif 'hello' in command or 'hi' in command:
+    elif 'hello arora' in command or 'hi arora' in command.lower():
         speak("Hello! How can I assist you today?")
     elif 'exit' in command or 'quit' in command:
         speak("Goodbye! Have a great day.")
         return False
     elif 'google' in command:
-        speak("OK")
-        webbrowser.open_new_tab("www.google.com")
-        speak("Here it is")
+        speak("Opening Google")
+        webbrowser.open_new_tab("https://www.google.com")
     elif 'youtube' in command:
-        speak("OK")
-        webbrowser.open_new_tab("www.youtube.com")
-        speak("Here it is")
+        speak("Opening YouTube")
+        webbrowser.open_new_tab("https://www.youtube.com")
     elif 'linkedin' in command:
-        speak("OK")
+        speak("Opening LinkedIn")
         webbrowser.open_new_tab("https://www.linkedin.com/feed/")
-        speak("Here it is")
-    elif 'open chat gpt' in command:
-        speak("OK")
-        webbrowser.open_new_tab("https://chatgpt.com/")
-        speak("here it is")
+    elif 'open chat gpt' in command or 'open chatgpt' in command:
+        speak("Opening ChatGPT")
+        webbrowser.open_new_tab("https://chat.openai.com/")
     elif 'open copilot' in command:
-        speak("OK")
-        webbrowser.open_new_tab("https://copilot.com/")
-        speak("here it is")
-   
+        speak("Opening Copilot")
+        webbrowser.open_new_tab("https://copilot.microsoft.com/")
     elif command.startswith("play"):
         try:
-            song = command.split(" ")[1]
-            link = Music.music[song]
-            webbrowser.open_new_tab(link)
-            speak("here it is")
+            song = ' '.join(command.split(" ")[1:])
+            speak(f"Searching for {song} on Spotify")
+            if play_on_spotify(song):
+                speak(f"Playing {song}")
+            else:
+                speak(f"Sorry, I couldn't find {song} on Spotify")
         except Exception as e:
-            speak(f"Sorry I can not play that song {e}")
+            speak(f"Sorry, I couldn't play that song. Error: {e}")
+    elif 'what is' in command or 'who is' in command or 'explain' in command:
+        response = ask_openai(command)
+        if response:
+            speak(response)
+        else:
+            speak("Sorry, I couldn't get an answer to that question.")
     else:
-        speak("Sorry, I don't understand that command.")
+        # For any other command, ask OpenAI
+        response = ask_openai(command)
+        if response:
+            speak(response)
+        else:
+            speak("Sorry, I don't understand that command.")
     return True
 
 def main():
@@ -101,4 +183,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
